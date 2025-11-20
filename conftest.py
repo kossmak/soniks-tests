@@ -24,6 +24,7 @@ from src.infrastructure.postgres.models.base import BaseORM
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
 
 log = logger.info
+# log = logger.debug
 
 # To run async tests
 # pytestmark = pytest.mark.anyio
@@ -211,10 +212,17 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
         # https://docs.sqlalchemy.org/en/20/orm/session_transaction.html#using-savepoint
         # async with session.begin_nested():  # не сработало! может быть только внутри активной session.begin()
 
+        class _SessionContext:
+            def __init__(self):
+                self.nested = None
+
+        session_context = _SessionContext()  # чтобы обойтись без nonlocal или global
+
         # 1. Внешняя транзакция — она НЕ должна коммититься
         async with session.begin():
             # 2. Вложенная транзакция (SAVEPOINT) — с ней работает тест
-            nested = await session.begin_nested()
+            # nested = await session.begin_nested()
+            session_context.nested = await session.begin_nested()
 
             # 3. Monkey-patch:
             # Сохраняем оригинальные методы
@@ -224,24 +232,34 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
                 """Вместо коммита всей транзакции — коммитим только SAVEPOINT.
                 После этого создаём новый SAVEPOINT для следующих операций.
                 """
-                nonlocal nested
-                if nested.is_active:
+                # nonlocal nested
+                nested = session_context.nested
+                if nested and nested.is_active:
                     await nested.commit()
                     log("SAVEPOINT committed, creating new one")
                     # Создаём новый SAVEPOINT для следующих операций
-                    nested = await session.begin_nested()
+                    # nested = await session.begin_nested()
+                    session_context.nested = await session.begin_nested()
+                    pass
 
             async def patched_rollback():
                 """
                 Откатываем только текущий SAVEPOINT, не всю транзакцию.
                 После отката создаём новый SAVEPOINT.
                 """
-                nonlocal nested
-                if nested.is_active:
+                # nonlocal nested
+                log("patched_rollback...")
+                nested = session_context.nested
+                if nested and nested.is_active:
                     await nested.rollback()
                     log("SAVEPOINT rolled back, creating new one")
-                    # Создаём новый SAVEPOINT
-                    nested = await session.begin_nested()
+                else:
+                    # Если nested неактивен — SQLAlchemy уже откатила его при ошибке
+                    log("SAVEPOINT already rolled back by SQLAlchemy (after error)")
+
+                # В любом случае создаём новый SAVEPOINT
+                log("Creating new SAVEPOINT")
+                session_context.nested = await session.begin_nested()
 
             # Подменяем методы
             session.commit = patched_commit
