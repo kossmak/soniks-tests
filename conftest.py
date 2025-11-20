@@ -141,17 +141,6 @@ def mock_model():
     return _fixture
 
 
-# @pytest.fixture  # не имеет смысла
-# def mock_session() -> AsyncSession:
-#     """Мок SQLAlchemy сессии"""
-#     session = MagicMock(spec=AsyncSession)
-#     session.execute = AsyncMock()
-#     session.commit = AsyncMock()
-#     session.rollback = AsyncMock()
-#     session.close = AsyncMock()
-#     return session
-
-
 @pytest.fixture
 def mock_request() -> starlette.requests.Request:
     """Мок FastAPI Request"""
@@ -220,53 +209,34 @@ def test_sessionmaker(test_engine) -> async_sessionmaker[AsyncSession]:
 @asynccontextmanager
 async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
     async with sessionmaker() as session:
+        # FIXME: use nested_transactions!
+        # https://docs.sqlalchemy.org/en/20/orm/session_transaction.html#using-savepoint
         async with session.begin():  # внешняя транзакция
-            await session.execute(sa.text("SAVEPOINT pytest_sp"))
+            # await session.execute(sa.text("SAVEPOINT pytest_sp"))
             try:
                 log("SAVEPOINT created — entering test")
+                # FIXME: сделай необходимые monkeypatch так чтобы в тестируемом коде запуск транзакции подменялся на begin_nested()
+                # nested = session.begin_nested()
                 yield session
                 # WARN: оригинальный get_session() ловит все SQLAlchemyError
                 #       и после роллбэка рейзит ошибку дальше
             finally:
                 log("Rolling back to SAVEPOINT")
-                await session.execute(sa.text("ROLLBACK TO SAVEPOINT pytest_sp"))
-                await session.execute(sa.text("RELEASE SAVEPOINT pytest_sp"))
+                # await session.execute(sa.text("ROLLBACK TO SAVEPOINT pytest_sp"))
+                # await session.execute(sa.text("RELEASE SAVEPOINT pytest_sp"))
                 await session.rollback()
                 log("test session cleaned up")
 
 
-# 5. Фикстура сессии с откатом (фикстура уровня отдельной тестовой функции, не сессии)
-# @pytest.fixture
-# async def test_session(test_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
+# 5. фабрика сессии с откатом до savepoint (фикстура уровня отдельной тестовой функции, не сессии)
 async def get_test_session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncGenerator[AsyncSession, None]:
     log("Entering get_test_session()")
-    # log("Entering test_session fixture")
-    # async with _session_with_savepoint(test_sessionmaker) as session:
     async with _session_with_savepoint(sessionmaker) as session:
         yield session
-    # log("Exited test_session fixture — DB clean!")
     log("Exited get_test_session() — DB clean!")
 
 
-# 6. Провайдер, который подменяет всё нужное в Dishka
-# class TestDBProvider(Provider):
-#     scope = Scope.APP
-#
-#     engine = provide(lambda: test_engine, provides=AsyncEngine)
-#     sessionmaker = provide(lambda: test_sessionmaker, provides=async_sessionmaker)
-#
-#     @provide(provides=AsyncSession, scope=Scope.REQUEST)
-#     async def get_session(self, test_session: AsyncSession) -> AsyncSession:
-#         log("Providing rolled-back AsyncSession to Dishka")
-#         return test_session
-#
-#     @provide(provides=Transaction, scope=Scope.REQUEST)
-#     async def get_transaction(self, test_session: AsyncSession) -> Transaction:
-#         log("Providing SQLAlchemyTransaction with test session")
-#         return SQLAlchemyTransaction(test_session)
-#
 @pytest.fixture(scope="session")
-# def db_provider(test_engine, test_sessionmaker, test_session) -> Provider:
 def db_provider(test_engine, test_sessionmaker) -> Provider:
     provider = Provider()
 
@@ -287,19 +257,12 @@ def db_provider(test_engine, test_sessionmaker) -> Provider:
         scope=Scope.REQUEST,
     )
     return provider
-#
-# @pytest.fixture(scope="session")
-# def test_db_provider() -> Generator[TestDBProvider, None, None]:
-#     log("Entering test_db_provider fixture (must be used only once...)")
-#     yield TestDBProvider()
-#     log("Exited test_db_provider fixture (must be used only once...)")
 
 
 # 7. Переопределяем фабрику контейнера — вставляем наш провайдер вместо продакшеновского
 @pytest.fixture(scope="session")
 async def dishka_container_factory(
     db_provider: Provider,
-    # test_db_provider: TestDBProvider,
 ) -> AsyncGenerator[AsyncContainer, None]:
     log("Creating Dishka container factory with test DB provider")
 
@@ -320,11 +283,10 @@ async def dishka_container_factory(
     # Заменяем инфраструктурный провайдер на наш тестовый
     app_scope_container = make_async_container(
         *original_providers,
-        # test_db_provider,  # наш тестовый провайдер просто перезапишет старые
         db_provider,  # наш тестовый провайдер просто перезапишет старые
         context=dishka_context,
     )
-    # FIXME: может быть не хватает setup_dishka() и экземпляра тестового app: FastAPI для него
+    # FUTURE: может быть не хватает setup_dishka() и экземпляра тестового app: FastAPI для него
     yield app_scope_container
     log("Exit from dishka_container_factory (must be used only once...)")
 
@@ -338,35 +300,3 @@ async def dishka_container(
     async with dishka_container_factory() as container:
         yield container
     log("Exited request-scoped container")
-
-
-# @pytest.fixture(scope="session")
-# async def connection(anyio_backend) -> AsyncGenerator[AsyncConnection, None]:
-#     async with engine.connect() as connection:
-#         yield connection
-#
-#
-# @pytest.fixture()
-# async def transaction(
-#     connection: AsyncConnection,
-# ) -> AsyncGenerator[AsyncTransaction, None]:
-#     async with connection.begin() as transaction:
-#         yield transaction
-
-
-# Use this fixture to get SQLAlchemy's AsyncSession.
-# All changes that occur in a test function are rolled back
-# after function exits, even if session.commit() is called
-# in inner functions
-# @pytest.fixture()
-# async def session(
-#     connection: AsyncConnection, transaction: AsyncTransaction
-# ) -> AsyncGenerator[AsyncSession, None]:
-#     async_session = AsyncSession(
-#         bind=connection,
-#         join_transaction_mode="create_savepoint",
-#     )
-#
-#     yield async_session
-#
-#     await transaction.rollback()
