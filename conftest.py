@@ -1,34 +1,23 @@
 """Общие фикстуры для всех тестов"""
 import dataclasses
-import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Generator, ParamSpecKwargs
-from uuid import UUID, uuid4
+from typing import AsyncGenerator, ParamSpecKwargs
 
 import pydantic
-import pytest
-import sqlalchemy as sa
 import starlette.requests
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
-from httpx import AsyncClient
 from loguru import logger
-from pytest_mock import MockerFixture
-from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
-    AsyncConnection,
     AsyncEngine,
-    AsyncSession,
-    AsyncTransaction,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, create_autospec
+from unittest.mock import MagicMock, create_autospec
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.interfaces.transaction import Transaction
 from src.core.configs import AdminSettings, AuthSettings, FileSettings, PostgresSettings, SQLEngineSettings, settings
 from src.core.containers import get_providers
 from src.infrastructure.postgres.models.base import BaseORM
@@ -208,24 +197,74 @@ def test_sessionmaker(test_engine) -> async_sessionmaker[AsyncSession]:
 # 4. SAVEPOINT — магия отката после каждого теста (контекстный менеджер)
 @asynccontextmanager
 async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
+    """
+    Создаёт сессию с SAVEPOINT для изоляции тестов.
+
+    Схема:
+    1. Открываем обычную транзакцию (BEGIN)
+    2. Внутри неё открываем вложенную транзакцию (SAVEPOINT)
+    3. Патчим commit(), чтобы он работал с SAVEPOINT
+    4. После теста откатываем внешнюю транзакцию
+    """
     async with sessionmaker() as session:
         # FIXME: use nested_transactions!
         # https://docs.sqlalchemy.org/en/20/orm/session_transaction.html#using-savepoint
-        async with session.begin():  # внешняя транзакция
-            # await session.execute(sa.text("SAVEPOINT pytest_sp"))
+        # async with session.begin_nested():  # не сработало! может быть только внутри активной session.begin()
+
+        # 1. Внешняя транзакция — она НЕ должна коммититься
+        async with session.begin():
+            # 2. Вложенная транзакция (SAVEPOINT) — с ней работает тест
+            nested = await session.begin_nested()
+
+            # 3. Monkey-patch:
+            # Сохраняем оригинальные методы
+            original_commit = session.commit
+            original_rollback = session.rollback
+            async def patched_commit():
+                """Вместо коммита всей транзакции — коммитим только SAVEPOINT.
+                После этого создаём новый SAVEPOINT для следующих операций.
+                """
+                nonlocal nested
+                if nested.is_active:
+                    await nested.commit()
+                    log("SAVEPOINT committed, creating new one")
+                    # Создаём новый SAVEPOINT для следующих операций
+                    nested = await session.begin_nested()
+
+            async def patched_rollback():
+                """
+                Откатываем только текущий SAVEPOINT, не всю транзакцию.
+                После отката создаём новый SAVEPOINT.
+                """
+                nonlocal nested
+                if nested.is_active:
+                    await nested.rollback()
+                    log("SAVEPOINT rolled back, creating new one")
+                    # Создаём новый SAVEPOINT
+                    nested = await session.begin_nested()
+
+            # Подменяем методы
+            session.commit = patched_commit
+            session.rollback = patched_rollback
+            # DONE: monkeypatch так чтобы в тестируемом коде запуск транзакции подменялся на begin_nested()
+
             try:
                 log("SAVEPOINT created — entering test")
-                # FIXME: сделай необходимые monkeypatch так чтобы в тестируемом коде запуск транзакции подменялся на begin_nested()
-                # nested = session.begin_nested()
                 yield session
+                log("Тест завершился успешно — SAVEPOINT остаётся до выхода из контекста")
                 # WARN: оригинальный get_session() ловит все SQLAlchemyError
                 #       и после роллбэка рейзит ошибку дальше
+            except SQLAlchemyError as exc:
+                log(f"Тест упал ({exc.__class__.__name__}) — SAVEPOINT будет возвращён автоматически")
+                raise
             finally:
-                log("Rolling back to SAVEPOINT")
-                # await session.execute(sa.text("ROLLBACK TO SAVEPOINT pytest_sp"))
-                # await session.execute(sa.text("RELEASE SAVEPOINT pytest_sp"))
+
+                log("Cleaning up test session...")
+                # Восстанавливаем оригинальные методы
+                session.commit = original_commit
+                session.rollback = original_rollback
+                log("SAVEPOINT возвращён — состояние БД идентично началу теста")
                 await session.rollback()
-                log("test session cleaned up")
 
 
 # 5. фабрика сессии с откатом до savepoint (фикстура уровня отдельной тестовой функции, не сессии)
@@ -300,3 +339,9 @@ async def dishka_container(
     async with dishka_container_factory() as container:
         yield container
     log("Exited request-scoped container")
+
+
+@pytest.fixture
+async def async_session(dishka_container: AsyncContainer) -> AsyncSession:
+    session = await dishka_container.get(AsyncSession)
+    return session
