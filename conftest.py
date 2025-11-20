@@ -9,7 +9,7 @@ import pydantic
 import pytest
 import sqlalchemy as sa
 import starlette.requests
-from dishka import AsyncContainer, Provider, Scope, make_async_container
+from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
 from httpx import AsyncClient
 from loguru import logger
 from pytest_mock import MockerFixture
@@ -163,9 +163,9 @@ def mock_request() -> starlette.requests.Request:
 
 
 # tests/conftest.py
+# 1. Один раз за все тесты применяем миграции (если нужно)
 @pytest.fixture(scope="session", autouse=True)
 async def _apply_migrations_once():
-    # Один раз за все тесты — поднимаем БД до актуальной версии через Alembic
     import subprocess, sys, os
     log("Applying Alembic migrations to test DB...")
     env = os.environ.copy()
@@ -174,34 +174,39 @@ async def _apply_migrations_once():
     log("Alembic migrations applied.")
 
 
-#########################################
-# grok phantasies...
-#########################################
-
-
-# test_engine = create_async_engine(TEST_DB_URL, echo=True)
+# 2. Тестовый engine (один на всю сессию, обязательно отдельная БД!)
 @pytest.fixture(scope="session")
 async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
-    # 1. Тестовый движок (обязательно отдельная БД!)
+    log("Creating test AsyncEngine")
+
     # инициализируем окружение единообразно с основным FastAPI-приложением
     # переменные окружения могут прилететь из .env-файла или в контексте запускаемого py.test
     # settings.postgres.DB = os.environ.get("POSTGRES__DB", "soniks_test")
-    # assert settings.postgres.DB == "soniks_test"
     # TEST_DB_URL = f"postgresql+asyncpg://{settings.postgres.USER}:{settings.postgres.PASSWORD}@{settings.postgres.HOST}:{settings.postgres.PORT}/soniks_test"
     TEST_DB_URL = settings.postgres.url
-    log('init test_engine')
-    async_engine = create_async_engine(
+    assert TEST_DB_URL.endswith("soniks_test")
+    engine = create_async_engine(
+        # теоретически, можно воспользоваться и имеющимся в dishka провайдером get_engine
+        # больших отличий тут не будет
+        # пока оставляю этот только для целостной картины
+        # и контролируемой инициализации тестового окружения
         TEST_DB_URL,
+        # echo=False,
         echo=settings.sql_engine.ECHO,
     )
-    # return async_engine
-    yield async_engine
-    log('close test_engine')
-    await async_engine.dispose()
+    yield engine
+    log("Disposing test engine")
+    await engine.dispose()
 
 
+# 3. Тестовый sessionmaker (привязан к test_engine)
 @pytest.fixture(scope="session")
-async def test_sessionmaker(test_engine):
+def test_sessionmaker(test_engine) -> async_sessionmaker[AsyncSession]:
+    log("Creating test sessionmaker")
+    # теоретически, можно воспользоваться и имеющимся в dishka провайдером get_session_maker
+    # больших отличий тут не будет
+    # пока оставляю этот только для целостной картины
+    # и контролируемой инициализации тестового окружения
     sessionmaker = async_sessionmaker(
         bind=test_engine,
         class_=AsyncSession,
@@ -211,58 +216,58 @@ async def test_sessionmaker(test_engine):
     return sessionmaker
 
 
+# 4. SAVEPOINT — магия отката после каждого теста (контекстный менеджер)
 @asynccontextmanager
-async def savepoint_session(session: AsyncSession):
-    await session.execute(sa.text("SAVEPOINT pytest_savepoint"))
-    try:
-        yield session
-    finally:
-        await session.execute(sa.text("ROLLBACK TO SAVEPOINT pytest_savepoint"))
-        await session.execute(sa.text("RELEASE SAVEPOINT pytest_savepoint"))
-
-
-# # 2. Одно соединение + все таблицы на всю сессию pytest
-# @pytest.fixture(scope="session")
-# async def _test_connection_and_models(test_engine):
-#     # async with test_engine.begin() as conn:
-#     #     await conn.run_sync(BaseORM.metadata.create_all)
-#
-#     # FIXME: в ближайшей итерации избавляюсь от connect()
-#     async with test_engine.connect() as conn:
-#         yield conn
-#
-#     # После всех тестов — чистим
-#     # async with test_engine.begin() as conn:
-#     #     await conn.run_sync(BaseORM.metadata.drop_all)
-#     await test_engine.dispose()
-#
-#
-# # 3. Главная фикстура: сессия с автоматическим rollback после каждого теста
-# @pytest.fixture(scope="session")
-# async def rolled_back_session(_test_connection_and_models, test_sessionmaker):
-#
-#     # connection = await _test_connection_and_models()
-#     connection = _test_connection_and_models
-#
-#     async def get_session() -> AsyncGenerator[AsyncSession, None]:
-#         # connection = _test_connection_and_models
-#         async with test_sessionmaker(bind=connection) as session:
-#             async with session.begin():        # ← вот эта магия откатывает ВСЁ
-#                 yield session
-#             # ← автоматический ROLLBACK, даже если был commit()
-#     return get_session
-
-# @pytest.fixture(autouse=True)
-@pytest.fixture()
-async def rolled_back_session():
-    async with async_sessionmaker() as session:
-        async with session.begin():
-            async with savepoint_session(session):
+async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
+    async with sessionmaker() as session:
+        async with session.begin():  # внешняя транзакция
+            await session.execute(sa.text("SAVEPOINT pytest_sp"))
+            try:
+                log("SAVEPOINT created — entering test")
                 yield session
+                # WARN: оригинальный get_session() ловит все SQLAlchemyError
+                #       и после роллбэка рейзит ошибку дальше
+            finally:
+                log("Rolling back to SAVEPOINT")
+                await session.execute(sa.text("ROLLBACK TO SAVEPOINT pytest_sp"))
+                await session.execute(sa.text("RELEASE SAVEPOINT pytest_sp"))
+                await session.rollback()
+                log("test session cleaned up")
 
 
+# 5. Фикстура сессии с откатом (фикстура уровня отдельной тестовой функции, не сессии)
+# @pytest.fixture
+# async def test_session(test_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
+async def get_test_session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncGenerator[AsyncSession, None]:
+    log("Entering get_test_session()")
+    # log("Entering test_session fixture")
+    # async with _session_with_savepoint(test_sessionmaker) as session:
+    async with _session_with_savepoint(sessionmaker) as session:
+        yield session
+    # log("Exited test_session fixture — DB clean!")
+    log("Exited get_test_session() — DB clean!")
+
+
+# 6. Провайдер, который подменяет всё нужное в Dishka
+# class TestDBProvider(Provider):
+#     scope = Scope.APP
+#
+#     engine = provide(lambda: test_engine, provides=AsyncEngine)
+#     sessionmaker = provide(lambda: test_sessionmaker, provides=async_sessionmaker)
+#
+#     @provide(provides=AsyncSession, scope=Scope.REQUEST)
+#     async def get_session(self, test_session: AsyncSession) -> AsyncSession:
+#         log("Providing rolled-back AsyncSession to Dishka")
+#         return test_session
+#
+#     @provide(provides=Transaction, scope=Scope.REQUEST)
+#     async def get_transaction(self, test_session: AsyncSession) -> Transaction:
+#         log("Providing SQLAlchemyTransaction with test session")
+#         return SQLAlchemyTransaction(test_session)
+#
 @pytest.fixture(scope="session")
-def db_provider(test_engine, test_sessionmaker, rolled_back_session) -> Provider:
+# def db_provider(test_engine, test_sessionmaker, test_session) -> Provider:
+def db_provider(test_engine, test_sessionmaker) -> Provider:
     provider = Provider()
 
     provider.provide(
@@ -276,55 +281,32 @@ def db_provider(test_engine, test_sessionmaker, rolled_back_session) -> Provider
         scope=Scope.APP,
     )
     provider.provide(
-        rolled_back_session,
+        # lambda: test_session,
+        get_test_session,
         provides=AsyncSession,
         scope=Scope.REQUEST,
     )
     return provider
-
-
-# end grok's code
-#########################################
-
-# Supply connection string
-# engine = create_async_engine("postgresql+psycopg2://...")
-
-
+#
 # @pytest.fixture(scope="session")
-# def dishka_container_factory() -> AsyncContainer:
-#     # инициализируем окружение единообразно с основным FastAPI-приложением
-#     # переменные окружения могут прилететь из .env-файла или в контексте запускаемого py.test
-#     settings.postgres.DB = os.environ.get("POSTGRES__DB", "soniks_test")
-#     assert settings.postgres.DB == "soniks_test"
-#     dishka_context = {
-#         PostgresSettings: settings.postgres,
-#         SQLEngineSettings: settings.sql_engine,
-#         AuthSettings: settings.auth,
-#         AdminSettings: settings.admin,
-#         FileSettings: settings.file,
-#     }
-#     # enter APP scope
-#     return make_async_container(*get_providers(), context=dishka_context)
+# def test_db_provider() -> Generator[TestDBProvider, None, None]:
+#     log("Entering test_db_provider fixture (must be used only once...)")
+#     yield TestDBProvider()
+#     log("Exited test_db_provider fixture (must be used only once...)")
 
 
-# # норм работал, но не умел чистить транзакцию, grok говорит, нужно хитрее (ниже)
-# @pytest.fixture()
-# async def dishka_container(dishka_container_factory: AsyncContainer):
-#     async with dishka_container_factory() as request_container:
-#         yield request_container
-
-
-#########################################
-# grok phantasies...
+# 7. Переопределяем фабрику контейнера — вставляем наш провайдер вместо продакшеновского
 @pytest.fixture(scope="session")
-def dishka_container_factory(
+async def dishka_container_factory(
     db_provider: Provider,
-    rolled_back_session: AsyncSession,
-) -> AsyncContainer:
+    # test_db_provider: TestDBProvider,
+) -> AsyncGenerator[AsyncContainer, None]:
+    log("Creating Dishka container factory with test DB provider")
+
     # инициализируем окружение единообразно с основным FastAPI-приложением
     # переменные окружения могут прилететь из .env-файла или в контексте запускаемого py.test
     # settings.postgres.DB = os.environ.get("POSTGRES__DB", "soniks_test")
-    # assert settings.postgres.DB == "soniks_test"
+    assert settings.postgres.DB == "soniks_test"
     dishka_context = {
         PostgresSettings: settings.postgres,
         SQLEngineSettings: settings.sql_engine,
@@ -332,36 +314,30 @@ def dishka_container_factory(
         AdminSettings: settings.admin,
         FileSettings: settings.file,
     }
+    original_providers = get_providers()  # твои обычные провайдеры
+
     # enter APP scope
-    providers = get_providers()
-
-    providers = (
-        providers[0],
-        db_provider,
-        *providers[2: ],
+    # Заменяем инфраструктурный провайдер на наш тестовый
+    app_scope_container = make_async_container(
+        *original_providers,
+        # test_db_provider,  # наш тестовый провайдер просто перезапишет старые
+        db_provider,  # наш тестовый провайдер просто перезапишет старые
+        context=dishka_context,
     )
-
-    # class TestTransaction:
-    #     def __init__(self, session: AsyncSession) -> None:
-    #         self._session: AsyncSession = session
-    # test_transaction = SQLAlchemyTransaction(rolled_back_session)
-    # gateway_provider.provide(test_transaction, provides=Transaction)  # FIXME: нужен тип/класс, не экземпляр
-    app_scope_container = make_async_container(*providers, context=dishka_context)
-
     # FIXME: может быть не хватает setup_dishka() и экземпляра тестового app: FastAPI для него
-    return app_scope_container
+    yield app_scope_container
+    log("Exit from dishka_container_factory (must be used only once...)")
 
 
-# 4. Переопределяем твой dishka_container, чтобы он использовал тестовую сессию
+# 8. Обычный контейнер — как и раньше, но теперь с откатом!
 @pytest.fixture
 async def dishka_container(
     dishka_container_factory: AsyncContainer,
 ) -> AsyncGenerator[AsyncContainer, None]:
+    log("Entering request-scoped Dishka container")
     async with dishka_container_factory() as container:
         yield container
-
-# end grok's code
-#########################################
+    log("Exited request-scoped container")
 
 
 # @pytest.fixture(scope="session")
