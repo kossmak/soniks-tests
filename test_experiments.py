@@ -20,8 +20,8 @@ def country(mock_model):
     return mock_model(CountryORM)
 
 
-# @pytest.mark.anyio
-@pytest.mark.asyncio
+@pytest.mark.anyio
+# @pytest.mark.asyncio
 class TestMockModels:
     async def test_models(self, country_query):
         c1 = country_query()
