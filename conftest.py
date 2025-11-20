@@ -253,13 +253,10 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
                 if nested and nested.is_active:
                     await nested.rollback()
                     log("SAVEPOINT rolled back, creating new one")
+                    session_context.nested = await session.begin_nested()
                 else:
                     # Если nested неактивен — SQLAlchemy уже откатила его при ошибке
-                    log("SAVEPOINT already rolled back by SQLAlchemy (after error)")
-
-                # В любом случае создаём новый SAVEPOINT
-                log("Creating new SAVEPOINT")
-                session_context.nested = await session.begin_nested()
+                    log("SAVEPOINT cannot rolled back because SQLAlchemy marked session as inactive (after error)")
 
             # Подменяем методы
             session.commit = patched_commit
