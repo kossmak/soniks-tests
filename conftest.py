@@ -5,7 +5,7 @@ from typing import AsyncGenerator, ParamSpecKwargs
 
 import pydantic
 import starlette.requests
-from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
+from dishka import AsyncContainer, Provider, Scope, make_async_container
 from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
@@ -18,7 +18,15 @@ import pytest
 from unittest.mock import MagicMock, create_autospec
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.configs import AdminSettings, AuthSettings, FileSettings, PostgresSettings, SQLEngineSettings, settings
+from src.core.configs import (
+    AdminSettings,
+    AuthSettings,
+    FileSettings,
+    LoggingSettings,
+    PostgresSettings,
+    SQLEngineSettings,
+    settings,
+)
 from src.core.containers import get_providers
 from src.infrastructure.postgres.models.base import BaseORM
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
@@ -330,6 +338,7 @@ async def dishka_container_factory(
         AuthSettings: settings.auth,
         AdminSettings: settings.admin,
         FileSettings: settings.file,
+        LoggingSettings: settings.logging,
     }
     original_providers = get_providers()  # твои обычные провайдеры
 
