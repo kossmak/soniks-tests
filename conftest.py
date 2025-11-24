@@ -2,10 +2,12 @@
 import dataclasses
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, ParamSpecKwargs
+from unittest.mock import MagicMock, Mock, create_autospec
 
 import pydantic
 import starlette.requests
 from dishka import AsyncContainer, Provider, Scope, make_async_container
+from fastapi import FastAPI
 from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
@@ -15,7 +17,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 import pytest
-from unittest.mock import MagicMock, create_autospec
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.configs import (
@@ -28,6 +29,7 @@ from src.core.configs import (
     settings,
 )
 from src.core.containers import get_providers
+from src.infrastructure.open_telemetry import configure_otlp
 from src.infrastructure.postgres.models.base import BaseORM
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
 
@@ -229,7 +231,6 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
         # 1. Внешняя транзакция — она НЕ должна коммититься
         async with session.begin():
             # 2. Вложенная транзакция (SAVEPOINT) — с ней работает тест
-            # nested = await session.begin_nested()
             session_context.nested = await session.begin_nested()
 
             # 3. Monkey-patch:
@@ -240,13 +241,11 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
                 """Вместо коммита всей транзакции — коммитим только SAVEPOINT.
                 После этого создаём новый SAVEPOINT для следующих операций.
                 """
-                # nonlocal nested
                 nested = session_context.nested
                 if nested and nested.is_active:
                     await nested.commit()
                     log("SAVEPOINT committed, creating new one")
                     # Создаём новый SAVEPOINT для следующих операций
-                    # nested = await session.begin_nested()
                     session_context.nested = await session.begin_nested()
                     pass
 
@@ -341,6 +340,13 @@ async def dishka_container_factory(
         LoggingSettings: settings.logging,
     }
     original_providers = get_providers()  # твои обычные провайдеры
+
+    fastapi_mock = Mock(spec=FastAPI)
+    configure_otlp(
+        fastapi_mock,
+        settings.app.APP_NAME,
+        settings.otlp,
+    )
 
     # enter APP scope
     # Заменяем инфраструктурный провайдер на наш тестовый
