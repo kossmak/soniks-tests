@@ -31,9 +31,12 @@ def country(mock_model):
 
 
 @pytest.fixture(autouse=True)
-async def _clean_countries(mock_model, async_session):
+async def _clean_countries(async_session):
     """Удалить все записи CountryORM из таблицы перед запуском теста."""
     await async_session.execute(delete(CountryORM))
+    # result = await async_session.execute(sa.select(sa.text("current_date")))
+    # current_date = result.fetchone()
+    # log(f"[debug] {current_date=}")
     await async_session.commit()
 
 
@@ -41,8 +44,7 @@ async def _clean_countries(mock_model, async_session):
 # @pytest.mark.asyncio  # кажется, это необязательно, если в conftest есть fixture `anyio_backend()`
 class TestCreateCountryInteractor:
 
-
-    async def test_call(self, dishka_container, country_query, mocker):
+    async def test_call(self, async_session, dishka_container, country_query):
         # БД-таблица пустая
         # добавляем новую запись успешно
         # добавляем идентичную запись - ошибка-дубликат
