@@ -71,7 +71,7 @@ class TestCreateSatelliteRequest:
         assert data.norad_id == 5111523
         assert data.operator_id is None
         assert data.project_id is None
-        assert data.sat_id is ''
+        assert data.sat_id == ""
         assert data.status == SatelliteStatusEnum.PLANNED
         t1, t2 = data.transmitters
         assert t1.model_dump() == {
