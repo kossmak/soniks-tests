@@ -1,7 +1,11 @@
 """Общие фикстуры для всех тестов"""
 import dataclasses
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, ParamSpecKwargs
+
+from dishka.integrations.fastapi import setup_dishka
+from starlette.applications import Starlette
+from starlette.testclient import TestClient
+from typing import AsyncGenerator, Generator, ParamSpecKwargs
 from unittest.mock import MagicMock, Mock, create_autospec
 
 import pydantic
@@ -30,8 +34,8 @@ from src.core.configs import (
 )
 from src.core.containers import get_providers
 from src.infrastructure.open_telemetry import configure_otlp
-from src.infrastructure.postgres.models.base import BaseORM
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
+from src.presentation.admin.base import CustomAdmin
 
 log = logger.info
 # log = logger.debug
@@ -297,6 +301,14 @@ async def get_test_session(sessionmaker: async_sessionmaker[AsyncSession]) -> As
     log("Exited get_test_session() — DB clean!")
 
 
+
+@pytest.fixture(scope="session")
+# def app() -> FastAPI:
+#     return FastAPI()
+def app() -> Starlette:
+    return Starlette()
+
+
 @pytest.fixture(scope="session")
 def db_provider(test_engine, test_sessionmaker) -> Provider:
     provider = Provider()
@@ -324,6 +336,7 @@ def db_provider(test_engine, test_sessionmaker) -> Provider:
 @pytest.fixture(scope="session")
 async def dishka_container_factory(
     db_provider: Provider,
+    app: FastAPI,
 ) -> AsyncGenerator[AsyncContainer, None]:
     log("Creating Dishka container factory with test DB provider")
 
@@ -343,6 +356,7 @@ async def dishka_container_factory(
 
     fastapi_mock = Mock(spec=FastAPI)
     configure_otlp(
+        # app,
         fastapi_mock,
         settings.app.APP_NAME,
         settings.otlp,
@@ -356,6 +370,7 @@ async def dishka_container_factory(
         context=dishka_context,
     )
     # FUTURE: может быть не хватает setup_dishka() и экземпляра тестового app: FastAPI для него
+    # setup_dishka(app_scope_container, app)
     yield app_scope_container
     log("Exit from dishka_container_factory (must be used only once...)")
 
@@ -375,3 +390,21 @@ async def dishka_container(
 async def async_session(dishka_container: AsyncContainer) -> AsyncSession:
     session = await dishka_container.get(AsyncSession)
     return session
+
+
+# @pytest.fixture(scope="session")
+# @pytest.fixture
+# def admin(app, test_engine) -> CustomAdmin:
+#     return CustomAdmin(app=app, engine=test_engine)
+#
+#
+# @pytest.fixture(scope="session")
+# def base_url() -> str:
+#     return "http://localhost:8888"
+#
+#
+# # @pytest.fixture(scope="session")
+# @pytest.fixture
+# def client(app, base_url: str) -> Generator[TestClient, None, None]:
+#     with TestClient(app=app, base_url=base_url) as client:
+#         yield client
