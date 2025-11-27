@@ -3,6 +3,7 @@ import dataclasses
 from contextlib import asynccontextmanager
 
 from dishka.integrations.fastapi import setup_dishka
+from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 from typing import AsyncGenerator, Generator, ParamSpecKwargs
@@ -392,19 +393,33 @@ async def async_session(dishka_container: AsyncContainer) -> AsyncSession:
     return session
 
 
+@pytest.fixture(scope="session")
+def base_url() -> str:
+    return "http://localhost:8088"
+
+
 # @pytest.fixture(scope="session")
-# @pytest.fixture
-# def admin(app, test_engine) -> CustomAdmin:
-#     return CustomAdmin(app=app, engine=test_engine)
-#
-#
+@pytest.fixture
+def admin(app, test_engine) -> CustomAdmin:
+    return CustomAdmin(
+        app=app,
+        engine=test_engine,
+        title=settings.admin.TITLE,
+        base_url=settings.admin.ADMIN_URL,
+        templates_dir=settings.admin.TEMPLATES_DIR,
+    )
+
+
 # @pytest.fixture(scope="session")
-# def base_url() -> str:
-#     return "http://localhost:8888"
-#
-#
-# # @pytest.fixture(scope="session")
 # @pytest.fixture
 # def client(app, base_url: str) -> Generator[TestClient, None, None]:
 #     with TestClient(app=app, base_url=base_url) as client:
 #         yield client
+@pytest.fixture
+async def client(app, base_url: str) -> AsyncGenerator[AsyncClient, None]:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url=base_url,
+    ) as async_client:
+        yield async_client
+    # log("Exited httpx client")
