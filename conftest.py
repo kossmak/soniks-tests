@@ -4,7 +4,9 @@ from contextlib import asynccontextmanager
 
 from dishka.integrations.fastapi import setup_dishka
 from httpx import ASGITransport, AsyncClient
+from starlette._utils import AwaitableOrContextManagerWrapper
 from starlette.applications import Starlette
+from starlette.datastructures import QueryParams, State, URL
 from starlette.testclient import TestClient
 from typing import AsyncGenerator, Generator, ParamSpecKwargs
 from unittest.mock import MagicMock, Mock, create_autospec
@@ -24,15 +26,8 @@ from sqlalchemy.ext.asyncio import (
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.configs import (
-    AdminSettings,
-    AuthSettings,
-    FileSettings,
-    LoggingSettings,
-    PostgresSettings,
-    SQLEngineSettings,
-    settings,
-)
+from src.app import dishka_context
+from src.core.configs import settings
 from src.core.containers import get_providers
 from src.infrastructure.open_telemetry import configure_otlp
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
@@ -144,16 +139,6 @@ def mock_model():
             return mock
         return _model_factory
     return _fixture
-
-
-@pytest.fixture
-def mock_request() -> starlette.requests.Request:
-    """Мок FastAPI Request"""
-    request = MagicMock(spec=starlette.requests.Request)
-    request.url = MagicMock()
-    request.url.path = "/admin/satellite-orm/edit/123"
-    request.method = "GET"
-    return request
 
 
 # tests/conftest.py
@@ -304,8 +289,6 @@ async def get_test_session(sessionmaker: async_sessionmaker[AsyncSession]) -> As
 
 
 @pytest.fixture(scope="session")
-# def app() -> FastAPI:
-#     return FastAPI()
 def app() -> Starlette:
     return Starlette()
 
@@ -345,15 +328,7 @@ async def dishka_container_factory(
     # переменные окружения могут прилететь из .env-файла или в контексте запускаемого py.test
     # settings.postgres.DB = os.environ.get("POSTGRES__DB", "soniks_test")
     assert settings.postgres.DB == "soniks_test"
-    dishka_context = {
-        PostgresSettings: settings.postgres,
-        SQLEngineSettings: settings.sql_engine,
-        AuthSettings: settings.auth,
-        AdminSettings: settings.admin,
-        FileSettings: settings.file,
-        LoggingSettings: settings.logging,
-    }
-    original_providers = get_providers()  # твои обычные провайдеры
+    original_providers = get_providers()
 
     fastapi_mock = Mock(spec=FastAPI)
     configure_otlp(
@@ -368,7 +343,7 @@ async def dishka_container_factory(
     app_scope_container = make_async_container(
         *original_providers,
         db_provider,  # наш тестовый провайдер просто перезапишет старые
-        context=dishka_context,
+        context=dishka_context(settings),
     )
     # FUTURE: может быть не хватает setup_dishka() и экземпляра тестового app: FastAPI для него
     # setup_dishka(app_scope_container, app)
@@ -410,16 +385,48 @@ def admin(app, test_engine) -> CustomAdmin:
     )
 
 
-# @pytest.fixture(scope="session")
+# # @pytest.fixture(scope="session")
+# # @pytest.fixture
+# # def client(app, base_url: str) -> Generator[TestClient, None, None]:
+# #     with TestClient(app=app, base_url=base_url) as client:
+# #         yield client
 # @pytest.fixture
-# def client(app, base_url: str) -> Generator[TestClient, None, None]:
-#     with TestClient(app=app, base_url=base_url) as client:
-#         yield client
+# FIXME: кажется, предполагает реальные HTTP-запросы к реальному, предварительно запущенному FastAPI-приложению
+# async def client(app, base_url: str) -> AsyncGenerator[AsyncClient, None]:
+#     async with AsyncClient(
+#         transport=ASGITransport(app=app),
+#         base_url=base_url,
+#     ) as async_client:
+#         yield async_client
+#     # log("Exited httpx client")
+
+
 @pytest.fixture
-async def client(app, base_url: str) -> AsyncGenerator[AsyncClient, None]:
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
+def mock_admin_url(base_url: str):
+    def factory(url_path: str) -> URL:
+        return URL(f"{base_url}{url_path}")
+    return factory
+
+
+@pytest.fixture
+def mock_request(mock_model, app, base_url, dishka_container: AsyncContainer):
+    """Мок FastAPI Request"""
+    defaults = dict(
+        app=app,
         base_url=base_url,
-    ) as async_client:
-        yield async_client
-    # log("Exited httpx client")
+        cookies={},
+        headers={},
+        path_params={},
+        query_params=QueryParams(),
+        state=State({"dishka_container": dishka_container}),
+        url=URL(base_url),
+        method="GET",
+    )
+    mock = mock_model(starlette.requests.Request, **defaults)
+
+    def factory(**kwargs):
+        # params = {**defaults, **kwargs}
+        # return mock(**params)
+        return mock(**kwargs)
+
+    return factory
