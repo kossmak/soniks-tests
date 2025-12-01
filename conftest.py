@@ -26,9 +26,8 @@ from sqlalchemy.ext.asyncio import (
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app import dishka_context
 from src.core.configs import settings
-from src.core.containers import get_providers
+from src.core.containers import dishka_context, get_providers
 from src.infrastructure.open_telemetry import configure_otlp
 from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
 from src.presentation.admin.base import CustomAdmin
