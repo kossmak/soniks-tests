@@ -1,23 +1,23 @@
 from typing import Any
-from unittest.mock import Mock
 
-import sqlalchemy as sa
 import pytest
-from loguru import logger
-from starlette.datastructures import ImmutableMultiDict, URL
-from starlette.requests import Request
-from starlette.testclient import TestClient
+import sqlalchemy as sa
+from starlette.datastructures import ImmutableMultiDict
 
-from src.domain.entities.satellite import SatelliteStatusEnum, TransmitterStatusEnum, TransmitterTypeEnum
-from src.infrastructure.postgres.models import CountryORM, DecoderORM, OperatorORM, SatelliteProjectORM
-from src.infrastructure.postgres.models import SatelliteORM
-from src.infrastructure.postgres.models import TransmitterORM
+from src.domain.entities.satellite import (
+    SatelliteStatusEnum,
+    TransmitterStatusEnum,
+    TransmitterTypeEnum,
+)
+from src.infrastructure.postgres.models import (
+    CountryORM,
+    DecoderORM,
+    OperatorORM,
+    SatelliteORM,
+    SatelliteProjectORM,
+)
 from src.presentation.admin import SatelliteAdmin
-
-
-# @pytest.fixture
-# def satellite(mock_model) -> None:
-#     return mock_model(SatelliteORM)
+from tests._utils import parse_html
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def satellite_form_data():
         "status": SatelliteStatusEnum.ON_ORBIT.name,
         "description": "Test satellite description",
         "launch_date": "2024-01-15 12:00:00",
-        # FK references (передаются как строковые ID)
+        # FK references (прилетают из админки как строковые ID)
         "countries": ["RU"],  # ID страны Russia
         "decoder": "1",
         "operator": "1",
@@ -61,45 +61,50 @@ def transmitter_form_data():
     }
 
 
-
 @pytest.fixture(autouse=True)
 async def _init_fk(async_session) -> None:
     """Удалить все ненужные записи из справочников и создать необходимые."""
     await async_session.execute(sa.delete(CountryORM))
-    async_session.add(CountryORM(
-        code="RU",
-        name="Russia",
-        image_path="country/ru.png",
-    ))
+    async_session.add(
+        CountryORM(
+            code="RU",
+            name="Russia",
+            image_path="country/ru.png",
+        )
+    )
     await async_session.execute(sa.delete(DecoderORM))
-    async_session.add(DecoderORM(
-        id=1,
-        name="FMDecoder",
-    ))
+    async_session.add(
+        DecoderORM(
+            id=1,
+            name="FMDecoder",
+        )
+    )
     await async_session.execute(sa.delete(OperatorORM))
-    async_session.add(OperatorORM(
-        id=1,
-        name="FirstOperator",
-    ))
+    async_session.add(
+        OperatorORM(
+            id=1,
+            name="FirstOperator",
+        )
+    )
     await async_session.execute(sa.delete(SatelliteProjectORM))
-    async_session.add(SatelliteProjectORM(
-        id=1,
-        name="NewProject",
-    ))
+    async_session.add(
+        SatelliteProjectORM(
+            id=1,
+            name="NewProject",
+        )
+    )
     await async_session.commit()
 
 
 @pytest.fixture(autouse=True)
 async def _clean_satellites(async_session) -> None:
     """Удалить все записи SatelliteORM."""
-    await async_session.execute(sa.delete(SatelliteORM))  # TransmitterORM удаляются каскадно
+    await async_session.execute(
+        sa.delete(SatelliteORM)
+    )  # TransmitterORM удаляются каскадно
     await async_session.commit()
 
 
-# @pytest.fixture(autouse=True)
-# def _add_admin(admin) -> None:
-#     logger.info("adding SatelliteAdmin view into application")
-#     admin.add_view(SatelliteAdmin)
 @pytest.fixture
 def satellite_admin(admin):
     """Экземпляр SatelliteAdmin."""
@@ -134,12 +139,43 @@ def make_form_data(
 
 @pytest.mark.anyio
 class TestSatelliteAdminList:
-
-    async def test_root_view(self, client) -> None:
-        response = await client.get("/admin", timeout=1)
+    async def test_empty_list(
+        self, admin, satellite_admin, mock_request, mock_admin_url
+    ):
+        """Пустой список спутников."""
+        request = mock_request(
+            url=mock_admin_url("/admin/satellite-orm/list"),
+            path_params={"identity": "satellite-orm"},
+        )
+        response = await admin.list(request)
 
         assert response.status_code == 200
-        assert '<span class="nav-link-title">Satellites</span>' in response.text
 
-    # async def test_create_satellite(self, dishka_container):
-    #     ...
+        # BaseAdmin возвращает TemplateResponse
+        assert (
+            response.template.name == "sqladmin/list.html"
+        )  # используем дефолтный шаблон из пакета
+
+        soup = parse_html(body=response.body)
+
+        search_input = soup.find("input", {"id": "search-input"})
+        assert (
+            search_input.get("placeholder")
+            == "Search: uuid, sat_id, call_sign, norad_id, name"
+        )
+
+        filters = (
+            soup.find(
+                "div",
+                {"id": "filter-sidebar"},
+            )
+            .find_next(
+                "div",
+                {"class": "list-group-item"},
+            )
+            .find_all_next("a")
+        )
+
+        assert [f.text.strip() for f in filters] == ["All"] + [
+            str(s) for s in SatelliteStatusEnum
+        ]
