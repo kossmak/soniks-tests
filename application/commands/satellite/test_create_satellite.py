@@ -4,9 +4,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.commands.satellite.create_or_update import CreateOrUpdateSatelliteInteractor
+from src.application.commands.satellite.create_or_update import (
+    CreateOrUpdateSatelliteInteractor,
+)
 from src.application.dtos.satellite import SatelliteQueryRequest
-from src.domain.exceptions.satellite.business_rules import SatelliteSatIDAlreadyExistsError
+from src.domain.exceptions.satellite.business_rules import (
+    SatelliteSatIDAlreadyExistsError,
+)
+
 
 def test_httpx_experiment():
     import httpx
@@ -17,7 +22,6 @@ def test_httpx_experiment():
 @pytest.mark.skip
 @pytest.mark.anyio
 class TestCreateSatelliteInteractor:
-
     async def test_call(self, dishka_container, mocker):
         # FIXME: инициализировать fixtur'ы:
         # БД-таблица пустая
@@ -30,22 +34,23 @@ class TestCreateSatelliteInteractor:
         interactor = await dishka_container.get(CreateOrUpdateSatelliteInteractor)
 
         satellite_data = SatelliteQueryRequest(
-            code='YY',
-            name='YY Satellite',
+            code="YY",
+            name="YY Satellite",
             image_path="satellite/yy.png",
         )
 
-
         # похоже не работает - вставка записей коммитится, несмотря на патч
-        mock_commit = mocker.patch.object(interactor._transaction, 'commit', return_value=None, autospec=True)
+        mock_commit = mocker.patch.object(
+            interactor._transaction, "commit", return_value=None, autospec=True
+        )
 
         satellite = await interactor(satellite_data)
 
         interactor._transaction.rollback()
 
-        assert satellite.code == 'YY'
-        assert satellite.name == 'YY Satellite'
-        assert satellite.image_path == 'satellite/yy.png'
+        assert satellite.code == "YY"
+        assert satellite.name == "YY Satellite"
+        assert satellite.image_path == "satellite/yy.png"
 
         assert mock_commit.call_count == 1
 
@@ -68,9 +73,9 @@ class TestCreateSatelliteInteractor:
 
         interactor._transaction.rollback()
 
-        assert satellite.code == 'YY'
-        assert satellite.name == 'YY Satellite'
-        assert satellite.image_path == 'satellite/yy.png'
+        assert satellite.code == "YY"
+        assert satellite.name == "YY Satellite"
+        assert satellite.image_path == "satellite/yy.png"
 
         assert mock_commit.call_count == 2
         session.delete(satellite)

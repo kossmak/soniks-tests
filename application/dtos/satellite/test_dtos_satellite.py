@@ -7,12 +7,15 @@ import pytest
 from pytest import fixture
 
 from src.application.dtos.satellite import CreateSatelliteRequest
-from src.domain.entities.satellite import SatelliteStatusEnum, TransmitterStatusEnum, TransmitterTypeEnum
+from src.domain.entities.satellite import (
+    SatelliteStatusEnum,
+    TransmitterStatusEnum,
+    TransmitterTypeEnum,
+)
 
 
 @pytest.mark.anyio
 class TestCreateSatelliteRequest:
-
     @fixture
     def transmitter(self) -> Callable[..., Any]:
         def factory(**kwargs) -> dict[str, Any]:
@@ -32,6 +35,7 @@ class TestCreateSatelliteRequest:
                 "type": TransmitterTypeEnum.TRANSMITTER,
             }
             return {**prototype, **kwargs}
+
         return factory
 
     @fixture
@@ -57,6 +61,7 @@ class TestCreateSatelliteRequest:
                 ],
             }
             return {**prototype, **kwargs}
+
         return factory
 
     async def test_empty_satellite(self, satellite, transmitter):
@@ -102,9 +107,11 @@ class TestCreateSatelliteRequest:
         # ]
 
         # корректные None вместо ""
-        raw_data.update({
-            "name": "Sputnik-1",
-        })
+        raw_data.update(
+            {
+                "name": "Sputnik-1",
+            }
+        )
         data = CreateSatelliteRequest.model_validate(raw_data)
         assert data.call_sign is None
         assert data.countries == set()
@@ -123,24 +130,26 @@ class TestCreateSatelliteRequest:
         assert len(data.transmitters) == 1
 
         # пустой трансмиттер
-        raw_data.update({
-            "transmitters": [
-                transmitter(
-                    # пустые строки нужно транслировать в None,
-                    # чтобы, например, не спотыкался constraint uq_transmitters_satnogs_uuid
-                    description="",
-                    satnogs_uuid="",
-                    downlink_mode="",
-                    uplink_mode="",
-                    downlink_frequency="",
-                    downlink_drift="",
-                    uplink_drift="",
-                    baud="",
-                    status="",
-                    type="",
-                ),
-            ],
-        })
+        raw_data.update(
+            {
+                "transmitters": [
+                    transmitter(
+                        # пустые строки нужно транслировать в None,
+                        # чтобы, например, не спотыкался constraint uq_transmitters_satnogs_uuid
+                        description="",
+                        satnogs_uuid="",
+                        downlink_mode="",
+                        uplink_mode="",
+                        downlink_frequency="",
+                        downlink_drift="",
+                        uplink_drift="",
+                        baud="",
+                        status="",
+                        type="",
+                    ),
+                ],
+            }
+        )
         with pytest.raises(pydantic.ValidationError) as err:
             CreateSatelliteRequest.model_validate(raw_data)
 
@@ -153,11 +162,13 @@ class TestCreateSatelliteRequest:
             ("transmitters", 0, "type"),
         }
 
-        raw_data["transmitters"][0].update({
-            "description": "Upper side band (drifting)",
-            "status": TransmitterStatusEnum.ACTIVE,
-            "type": TransmitterTypeEnum.TRANSMITTER,
-        })
+        raw_data["transmitters"][0].update(
+            {
+                "description": "Upper side band (drifting)",
+                "status": TransmitterStatusEnum.ACTIVE,
+                "type": TransmitterTypeEnum.TRANSMITTER,
+            }
+        )
         data = CreateSatelliteRequest.model_validate(raw_data)
         t1 = data.transmitters[0]
         assert t1.model_dump() == {
@@ -217,7 +228,10 @@ class TestCreateSatelliteRequest:
         assert data.decoder_id == 16
         assert data.deployer_uuid is None
         assert data.description == "ook! third manually аддед"
-        assert data.launch_uuid.hex == uuid.UUID("0503479c-f2ba-4e78-8182-3b8be9ab2fec").hex
+        assert (
+            data.launch_uuid.hex
+            == uuid.UUID("0503479c-f2ba-4e78-8182-3b8be9ab2fec").hex
+        )
         assert data.launch_date == datetime.datetime(2022, 10, 10, 12, 0)
         assert data.name == "TyanGuan"
         assert data.norad_id == 5111523
@@ -244,11 +258,11 @@ class TestCreateSatelliteRequest:
         assert t2.model_dump() == {
             "satnogs_uuid": None,
             "downlink_mode": None,
-            "uplink_mode": None, 
+            "uplink_mode": None,
             "downlink_frequency": None,
             "uplink_frequency": None,
             "downlink_drift": None,
-            "uplink_drift": None, 
+            "uplink_drift": None,
             "baud": None,  # FIXME: в TransmitterORM.baud - обязательное поле
             "description": "Upper side band (drifting)",
             "citation": "https://secwww.jhuapl.edu/techdigest/Content/techdigest/pdf/V05-N04/05-04-Danchik.pdf",

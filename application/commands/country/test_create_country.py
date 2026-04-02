@@ -19,8 +19,8 @@ log = logger.info
 def country_query(mock_model):
     return mock_model(
         CountryQueryModel,
-        code='YY',
-        name='YY Country',
+        code="YY",
+        name="YY Country",
         image_path="country/yy.png",
     )
 
@@ -43,7 +43,6 @@ async def _clean_countries(async_session):
 @pytest.mark.anyio
 # @pytest.mark.asyncio  # кажется, это необязательно, если в conftest есть fixture `anyio_backend()`
 class TestCreateCountryInteractor:
-
     async def test_call(self, async_session, dishka_container, country_query):
         # БД-таблица пустая
         # добавляем новую запись успешно
@@ -56,9 +55,9 @@ class TestCreateCountryInteractor:
         log(f"insert first record: {country_data.code}")
         country: CountryResponse = await interactor(country_data)
 
-        assert country.code == 'YY'
-        assert country.name == 'YY Country'
-        assert country.image_path == 'country/yy.png'
+        assert country.code == "YY"
+        assert country.name == "YY Country"
+        assert country.image_path == "country/yy.png"
 
         log(f"try to insert 2nd (duplicate) record: {country_data.code}")
         try:
@@ -69,9 +68,9 @@ class TestCreateCountryInteractor:
             pytest.fail("duplicate not found!")
 
         country_data = country_query(
-            code='WW',
-            name='Volkswagen',
-            image_path='country/ww.png',
+            code="WW",
+            name="Volkswagen",
+            image_path="country/ww.png",
         )
         log(f"try to insert 3rd record: {country_data.code}")
         try:
@@ -93,7 +92,13 @@ class TestSavepointIsolation:
         """Первый тест — добавляем данные."""
         interactor = await dishka_container.get(CreateCountryInteractor)
 
-        await interactor(country_query(code='WW', name='Volkswagen', image_path='country/ww.png'))
+        await interactor(
+            country_query(
+                code="WW",
+                name="Volkswagen",
+                image_path="country/ww.png",
+            ),
+        )
 
         session = await dishka_container.get(AsyncSession)
         stmt = sa.select(func.count()).select_from(CountryORM)

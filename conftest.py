@@ -1,4 +1,5 @@
 """Общие фикстуры для всех тестов"""
+
 import dataclasses
 from contextlib import asynccontextmanager
 
@@ -124,6 +125,7 @@ def mock_model():
     ```
 
     """
+
     def _fixture(
         model_class: type[dataclasses.dataclass] | pydantic.BaseModel,
         **default_fields: ParamSpecKwargs,
@@ -136,7 +138,9 @@ def mock_model():
             mock.__dict__.update(default_fields)
             mock.__dict__.update(kwargs)
             return mock
+
         return _model_factory
+
     return _fixture
 
 
@@ -145,6 +149,7 @@ def mock_model():
 @pytest.fixture(scope="session", autouse=True)
 async def _apply_migrations_once():
     import subprocess, sys, os
+
     log("Applying Alembic migrations to test DB...")
     env = os.environ.copy()
     env["ENVIRONMENT"] = "unittests"  # или как у тебя называется тестовая env
@@ -196,7 +201,9 @@ def test_sessionmaker(test_engine) -> async_sessionmaker[AsyncSession]:
 
 # 4. SAVEPOINT — магия отката после каждого теста (контекстный менеджер)
 @asynccontextmanager
-async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGenerator[AsyncSession, None]:
+async def _session_with_savepoint(
+    sessionmaker: async_sessionmaker,
+) -> AsyncGenerator[AsyncSession, None]:
     """
     Создаёт сессию с SAVEPOINT для изоляции тестов.
 
@@ -226,6 +233,7 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
             # Сохраняем оригинальные методы
             original_commit = session.commit
             original_rollback = session.rollback
+
             async def patched_commit():
                 """Вместо коммита всей транзакции — коммитим только SAVEPOINT.
                 После этого создаём новый SAVEPOINT для следующих операций.
@@ -252,7 +260,9 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
                     session_context.nested = await session.begin_nested()
                 else:
                     # Если nested неактивен — SQLAlchemy уже откатила его при ошибке
-                    log("SAVEPOINT cannot rolled back because SQLAlchemy marked session as inactive (after error)")
+                    log(
+                        "SAVEPOINT cannot rolled back because SQLAlchemy marked session as inactive (after error)"
+                    )
 
             # Подменяем методы
             session.commit = patched_commit
@@ -262,14 +272,17 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
             try:
                 log("SAVEPOINT created — entering test")
                 yield session
-                log("Тест завершился успешно — SAVEPOINT остаётся до выхода из контекста")
+                log(
+                    "Тест завершился успешно — SAVEPOINT остаётся до выхода из контекста"
+                )
                 # WARN: оригинальный get_session() ловит все SQLAlchemyError
                 #       и после роллбэка рейзит ошибку дальше
             except SQLAlchemyError as exc:
-                log(f"Тест упал ({exc.__class__.__name__}) — SAVEPOINT будет возвращён автоматически")
+                log(
+                    f"Тест упал ({exc.__class__.__name__}) — SAVEPOINT будет возвращён автоматически"
+                )
                 raise
             finally:
-
                 log("Cleaning up test session...")
                 # Восстанавливаем оригинальные методы
                 session.commit = original_commit
@@ -279,12 +292,13 @@ async def _session_with_savepoint(sessionmaker: async_sessionmaker) -> AsyncGene
 
 
 # 5. фабрика сессии с откатом до savepoint (фикстура уровня отдельной тестовой функции, не сессии)
-async def get_test_session(sessionmaker: async_sessionmaker[AsyncSession]) -> AsyncGenerator[AsyncSession, None]:
+async def get_test_session(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession, None]:
     log("Entering get_test_session()")
     async with _session_with_savepoint(sessionmaker) as session:
         yield session
     log("Exited get_test_session() — DB clean!")
-
 
 
 @pytest.fixture(scope="session")
@@ -404,6 +418,7 @@ def admin(app, test_engine) -> CustomAdmin:
 def mock_admin_url(base_url: str):
     def factory(url_path: str) -> URL:
         return URL(f"{base_url}{url_path}")
+
     return factory
 
 
