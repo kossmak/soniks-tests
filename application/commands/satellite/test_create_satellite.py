@@ -1,7 +1,4 @@
-from unittest.mock import Mock
-
 import pytest
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.commands.satellite.create_or_update import (
@@ -14,8 +11,7 @@ from src.domain.exceptions.satellite.business_rules import (
 
 
 def test_httpx_experiment():
-    import httpx
-    import asyncio
+    pass
 
 
 # @pytest.mark.asyncio  # claude's variant

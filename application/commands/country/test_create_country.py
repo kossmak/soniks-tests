@@ -4,12 +4,11 @@ from loguru import logger
 from sqlalchemy import delete, func
 from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.application.commands.country.create import CreateCountryInteractor
+
 from src.application.dtos.country import CountryQueryModel, CountryResponse
 from src.domain.exceptions.country import CountryCodeAlreadyExistsError
 from src.infrastructure.postgres.models import CountryORM
-
 
 log = logger.info
 # log = logger.debug

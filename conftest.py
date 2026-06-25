@@ -2,17 +2,11 @@
 
 import dataclasses
 from contextlib import asynccontextmanager
-
-from dishka.integrations.fastapi import setup_dishka
-from httpx import ASGITransport, AsyncClient
-from starlette._utils import AwaitableOrContextManagerWrapper
-from starlette.applications import Starlette
-from starlette.datastructures import QueryParams, State, URL
-from starlette.testclient import TestClient
-from typing import AsyncGenerator, Generator, ParamSpecKwargs
-from unittest.mock import MagicMock, Mock, create_autospec
+from typing import AsyncGenerator, ParamSpecKwargs
+from unittest.mock import Mock, create_autospec
 
 import pydantic
+import pytest
 import starlette.requests
 from dishka import AsyncContainer, Provider, Scope, make_async_container
 from fastapi import FastAPI
@@ -20,17 +14,16 @@ from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
+    AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.applications import Starlette
+from starlette.datastructures import URL, QueryParams, State
 
 from src.core.configs import settings
 from src.core.containers import dishka_context, get_providers
 from src.infrastructure.open_telemetry import configure_otlp
-from src.infrastructure.postgres.transaction import SQLAlchemyTransaction
 from src.presentation.admin.base import CustomAdmin
 
 log = logger.info
@@ -148,7 +141,9 @@ def mock_model():
 # 1. Один раз за все тесты применяем миграции (если нужно)
 @pytest.fixture(scope="session", autouse=True)
 async def _apply_migrations_once():
-    import subprocess, sys, os
+    import os
+    import subprocess
+    import sys
 
     log("Applying Alembic migrations to test DB...")
     env = os.environ.copy()

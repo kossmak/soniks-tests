@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from starlette.datastructures import ImmutableMultiDict
+from tests._utils import parse_html
 
 from src.domain.entities.satellite import (
     SatelliteStatusEnum,
@@ -17,7 +18,6 @@ from src.infrastructure.postgres.models import (
     SatelliteProjectORM,
 )
 from src.presentation.admin import SatelliteAdmin
-from tests._utils import parse_html
 
 
 @pytest.fixture
